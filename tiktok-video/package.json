@@ -1,0 +1,21 @@
+{
+  "name": "tiktok-video",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "render": "remotion render src/index.ts TikTokTutorial out/tiktok-tutorial.mp4",
+    "studio": "remotion studio src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@remotion/cli": "^4.0.457",
+    "@remotion/renderer": "^4.0.457",
+    "framer-motion": "^12.38.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "remotion": "^4.0.457"
+  }
+}
