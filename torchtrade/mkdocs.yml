@@ -1,0 +1,114 @@
+site_name: TorchTrade Documentation
+site_description: Reinforcement learning environments for algorithmic trading
+site_author: TorchTrade Team
+site_url: https://torchtrade.github.io/torchtrade/
+
+theme:
+  name: material
+  logo: images/torchtrade_white.png
+  features:
+    - navigation.tabs
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.expand
+    - navigation.path
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - content.code.annotation
+    - content.code.copy
+  language: en
+  palette:
+    - scheme: slate
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to Light Mode
+      primary: black
+      accent: orange
+    - scheme: default
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to Dark Mode
+      primary: grey
+      accent: orange
+
+extra:
+  social:
+    - icon: fontawesome/brands/github-alt
+      link: https://github.com/TorchTrade/torchtrade
+      name: TorchTrade on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/torchtrade/
+      name: TorchTrade on PyPI
+
+markdown_extensions:
+  - admonition
+  - pymdownx.tasklist
+  - pymdownx.details
+  - pymdownx.snippets
+  - pymdownx.mark
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - footnotes
+  - tables
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+repo_url: https://github.com/TorchTrade/torchtrade
+repo_name: TorchTrade/torchtrade
+edit_uri: edit/main/docs/
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Examples:
+      - Overview: examples/index.md
+      - Results: examples/results.md
+
+  - Environments:
+      - Offline Environments: environments/offline.md
+      - Visualization: environments/visualization.md
+      - Online Environments: environments/online.md
+      - Offline RL: environments/offline-rl.md
+      - Understanding the Sampler: guides/sampler.md
+      - Building Custom Environments: guides/custom-environment.md
+
+  - Components:
+      - Loss Functions: components/losses.md
+      - Transforms: components/transforms.md
+      - Actors: components/actors.md
+
+  - Advanced Customization:
+      - Feature Engineering: guides/custom-features.md
+      - Reward Functions: guides/reward-functions.md
+      - Performance Metrics: guides/metrics.md
+
+copyright: © 2025 <a href="https://github.com/TorchTrade" target="_blank" rel="noopener">TorchTrade</a>
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js

@@ -1,0 +1,74 @@
+{
+  "name": "cognetivy",
+  "version": "2.0.10",
+  "description": "Reasoning orchestration state: workflow structure, run logs, and versioned mutations",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "cognetivy": "dist/cli.js"
+  },
+  "scripts": {
+    "build:core": "npm install --prefix ../core && npm run build --prefix ../core",
+    "sync:core": "node ./scripts/sync-core-source.mjs",
+    "prebuild": "npm run build:core && npm run sync:core",
+    "build:local-studio": "npm run build:local --prefix ../../cloud-studio",
+    "build": "npm run prebuild && tsc && node ./scripts/copy-installer-assets.mjs && node ./scripts/copy-local-studio-assets.mjs",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:live": "npx tsc && COGNETIVY_LIVE_CLAUDE=1 node --test test/claude-stream-stdio-smoke.test.mjs",
+    "release": "npm version patch && npm publish",
+    "release:minor": "npm version minor && npm publish",
+    "release:major": "npm version major && npm publish",
+    "release:next": "npm publish --tag next"
+  },
+  "keywords": [
+    "cli",
+    "workflow",
+    "reasoning",
+    "mcp"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/meitarbe/cognetivy.git",
+    "directory": "cli"
+  },
+  "homepage": "https://github.com/meitarbe/cognetivy#readme",
+  "bugs": {
+    "url": "https://github.com/meitarbe/cognetivy/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.0.1",
+    "ajv": "^8.18.0",
+    "ajv-formats": "^3.0.1",
+    "better-sqlite3": "^12.8.0",
+    "chokidar": "^4.0.1",
+    "commander": "^12.1.0",
+    "env-paths": "^3.0.0",
+    "express": "^5.2.1",
+    "fast-json-patch": "^3.1.1",
+    "front-matter": "^4.0.2",
+    "open": "^11.0.0",
+    "ora": "^9.3.0",
+    "pngjs": "^7.0.0",
+    "update-notifier": "^7.3.1",
+    "ws": "^8.20.0",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.10.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.7.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "studio_example.jpg"
+  ]
+}

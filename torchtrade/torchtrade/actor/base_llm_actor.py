@@ -1,0 +1,227 @@
+"""Base LLM Actor with environment-driven prompt construction and action extraction."""
+import logging
+import re
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Callable, List, Optional, Union
+
+import torch
+
+if TYPE_CHECKING:
+    from tensordict import TensorDict
+
+logger = logging.getLogger(__name__)
+
+SystemPrompt = Union[str, Callable[["BaseLLMActor"], str]]
+UserPromptFn = Callable[["BaseLLMActor", "TensorDict"], str]
+
+
+class BaseLLMActor(ABC):
+    """
+    Base class for LLM-based trading actors.
+
+    All configuration is derived from the environment — no hardcoded action
+    mappings or account state labels.
+
+    Args:
+        market_data_keys: From env.market_data_keys (e.g. ["market_data_1Hour_48"]).
+        account_state_labels: From env.account_state (e.g. ["exposure_pct", ...]).
+        action_levels: From env.action_levels (e.g. [-1, 0, 1] or [0, 0.5, 1]).
+        symbol: Trading symbol (e.g. "BTC/USD").
+        execute_on: Execution timeframe (e.g. "1Hour").
+        feature_keys: Column names in market data tensors.
+        debug: Enable debug output.
+        system_prompt: Optional override for the system prompt. Pass a string
+            for a static replacement, or a callable `f(actor) -> str` for
+            dynamic construction (e.g. to prepend extra context to the
+            default: `lambda a: extra + a._build_system_prompt()`).
+            If None, the default prompt built from `symbol`, `execute_on`,
+            and `action_levels` is used.
+        user_prompt_fn: Optional callable `f(actor, tensordict) -> str` that
+            replaces the default user prompt construction. Useful for custom
+            data layouts or formats. If None, the default prompt (account
+            state + market data tables) is used. The callable receives the
+            live tensordict for the current step — read freely, but do NOT
+            mutate it (writes will leak into observation/action keys).
+    """
+
+    def __init__(
+        self,
+        market_data_keys: List[str],
+        account_state_labels: List[str],
+        action_levels: List[float],
+        symbol: str = "BTC/USD",
+        execute_on: object = "1Hour",
+        feature_keys: Optional[List[str]] = None,
+        action_descriptions: Optional[List[str]] = None,
+        debug: bool = False,
+        system_prompt: Optional[SystemPrompt] = None,
+        user_prompt_fn: Optional[UserPromptFn] = None,
+    ):
+        self.market_data_keys = market_data_keys
+        self.account_state_labels = account_state_labels
+        self.action_levels = action_levels
+        self.symbol = symbol
+        # Accept TimeFrame objects from env configs — they normalize execute_on
+        # in __post_init__, so callers passing config.execute_on get a TimeFrame.
+        # obs_key_freq() renders "1Hour"-style strings; str() would leak repr.
+        self.execute_on = (
+            execute_on.obs_key_freq() if hasattr(execute_on, "obs_key_freq") else str(execute_on)
+        )
+        self.feature_keys = feature_keys or ["open", "high", "low", "close", "volume"]
+        self.debug = debug
+        self._system_prompt_override = system_prompt
+        self._user_prompt_fn = user_prompt_fn
+
+        # Action descriptions: explicit override (e.g. for binary up/down envs)
+        # falls back to the auto-generated "target exposure" language.
+        self._action_descriptions = (
+            list(action_descriptions)
+            if action_descriptions is not None
+            else self._build_action_descriptions()
+        )
+
+        # Pre-compile regex
+        self._answer_pattern = re.compile(r"<answer>\s*(\d+)\s*</answer>", re.IGNORECASE | re.DOTALL)
+
+    def _build_action_descriptions(self) -> List[str]:
+        """Build human-readable descriptions for each action index."""
+        descriptions = []
+        for i, level in enumerate(self.action_levels):
+            pct = level * 100
+            if level == 0:
+                descriptions.append(f"Action {i} → target 0% (flat/no position)")
+            elif level > 0:
+                descriptions.append(f"Action {i} → target +{pct:.0f}% (long)")
+            else:
+                descriptions.append(f"Action {i} → target {pct:.0f}% (short)")
+        return descriptions
+
+    def _build_system_prompt(self) -> str:
+        """Build system prompt dynamically from env configuration."""
+        action_list = "\n".join(f"  {d}" for d in self._action_descriptions)
+        return (
+            f"You are a trading agent for {self.symbol} on the {self.execute_on} timeframe.\n"
+            f"At each step you receive account state and market data.\n\n"
+            f"Available actions (target exposure levels):\n{action_list}\n\n"
+            f"- Think step-by-step inside <think></think>.\n"
+            f"- Output your chosen action number in exact format: <answer>N</answer>\n"
+            f"  where N is the action number (0 to {len(self.action_levels) - 1})."
+        )
+
+    @abstractmethod
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        """Generate a response given system and user prompts. Subclasses implement this."""
+
+    def __call__(self, tensordict):
+        return self.forward(tensordict)
+
+    def forward(self, tensordict):
+        """Main forward pass: construct prompts, generate, extract action, save to tensordict."""
+        system_prompt = self._resolve_system_prompt()
+        user_prompt = (
+            self._user_prompt_fn(self, tensordict)
+            if self._user_prompt_fn is not None
+            else self._construct_user_prompt(tensordict)
+        )
+        self._debug("SYSTEM PROMPT", system_prompt)
+        self._debug("USER PROMPT", user_prompt)
+
+        response = self.generate(system_prompt, user_prompt)
+        self._debug("RESPONSE", response)
+
+        action_idx = self._extract_action(response)
+
+        tensordict.set("action", torch.tensor(action_idx, dtype=torch.long))
+        tensordict.set("thinking", response)
+        tensordict.set("system_prompt", system_prompt)
+        tensordict.set("user_prompt", user_prompt)
+
+        return tensordict
+
+    def _debug(self, label: str, content: str) -> None:
+        if self.debug:
+            print(f"{'=' * 80}\n{label}:\n{content}")
+
+    def _resolve_system_prompt(self) -> str:
+        override = self._system_prompt_override
+        if override is None:
+            return self._build_system_prompt()
+        if callable(override):
+            return override(self)
+        return override
+
+    # --- Prompt construction ---
+
+    def _construct_user_prompt(self, tensordict) -> str:
+        return self._construct_account_state(tensordict) + self._construct_market_data(tensordict)
+
+    def _construct_account_state(self, tensordict) -> str:
+        # Envs that don't expose account_state (e.g. PolymarketBetEnv) just
+        # omit the key — skip this block.
+        if "account_state" not in tensordict:
+            return ""
+
+        account_state = tensordict.get("account_state")
+        if account_state.dim() == 2 and account_state.shape[0] == 1:
+            account_state = account_state.squeeze(0)
+
+        out = "Current account state:\n"
+        for idx, label in enumerate(self.account_state_labels):
+            out += f"  {label}: {round(account_state[idx].item(), 4)}\n"
+        out += "\n---\n"
+        return out
+
+    def _construct_market_data(self, tensordict) -> str:
+        out = "Current market data:\n\n"
+        for key in self.market_data_keys:
+            if key not in tensordict:
+                continue
+
+            data = tensordict[key].cpu().numpy()
+            if data.ndim == 3 and data.shape[0] == 1:
+                data = data.squeeze(0)
+
+            # Flat 1D market state (e.g. PolymarketBetEnv's
+            # [yes_price, spread, vol_24h, liquidity]) — render as one labeled row.
+            if data.ndim == 1:
+                if len(self.feature_keys) != data.shape[0]:
+                    raise ValueError(
+                        f"Unexpected market data shape for {key}: {data.shape} "
+                        f"(expected 1D with {len(self.feature_keys)} feature values)"
+                    )
+                out += f"{key}:\n"
+                for label, value in zip(self.feature_keys, data, strict=True):
+                    out += f"  {label}: {value:.4f}\n"
+                out += "\n"
+                continue
+
+            if data.ndim != 2 or data.shape[1] != len(self.feature_keys):
+                raise ValueError(
+                    f"Unexpected market data shape for {key}: {data.shape} "
+                    f"(expected 2D with {len(self.feature_keys)} feature columns)"
+                )
+
+            out += f"{key}:\n\n"
+            header = " | ".join(f"{k:>8}" for k in self.feature_keys)
+            out += header + "\n\n"
+            for t in range(data.shape[0]):
+                row = " | ".join(f"{v:8.1f}" for v in data[t])
+                out += row + "\n"
+            out += "\n"
+
+        return out
+
+    # --- Action extraction ---
+
+    def _extract_action(self, response: str) -> int:
+        """Extract action index from <answer>N</answer> tag."""
+        match = self._answer_pattern.search(response)
+        if match:
+            idx = int(match.group(1))
+            if 0 <= idx < len(self.action_levels):
+                return idx
+            logger.warning("Action %d out of range [0, %d); defaulting to 0", idx, len(self.action_levels))
+            return 0
+
+        logger.warning("No <answer> tag found in response; defaulting to action 0")
+        return 0

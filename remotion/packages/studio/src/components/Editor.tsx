@@ -1,0 +1,114 @@
+import {PlayerInternals} from '@remotion/player';
+import React, {useCallback, useMemo, useState} from 'react';
+import type {CurrentScaleContextType} from 'remotion';
+import {Internals} from 'remotion';
+import {BACKGROUND} from '../helpers/colors';
+import {noop} from '../helpers/noop';
+import {drawRef} from '../state/canvas-ref';
+import {TimelineZoomContext} from '../state/timeline-zoom';
+import {HigherZIndex} from '../state/z-index';
+import {EditorContent} from './EditorContent';
+import {ForceSpecificCursor} from './ForceSpecificCursor';
+import {GlobalKeybindings} from './GlobalKeybindings';
+import {Modals} from './Modals';
+import {NotificationCenter} from './Notifications/NotificationCenter';
+import {RenderErrorContext} from './RenderErrorContext';
+import {TopPanel} from './TopPanel';
+
+const background: React.CSSProperties = {
+	backgroundColor: BACKGROUND,
+	display: 'flex',
+	width: '100%',
+	height: '100%',
+	flexDirection: 'column',
+	position: 'absolute',
+};
+
+const DEFAULT_BUFFER_STATE_DELAY_IN_MILLISECONDS = 300;
+
+export const BUFFER_STATE_DELAY_IN_MILLISECONDS =
+	typeof process.env.BUFFER_STATE_DELAY_IN_MILLISECONDS === 'undefined' ||
+	process.env.BUFFER_STATE_DELAY_IN_MILLISECONDS === null
+		? DEFAULT_BUFFER_STATE_DELAY_IN_MILLISECONDS
+		: Number(process.env.BUFFER_STATE_DELAY_IN_MILLISECONDS);
+
+export const Editor: React.FC<{
+	readonly Root: React.FC;
+	readonly readOnlyStudio: boolean;
+}> = ({Root, readOnlyStudio}) => {
+	const size = PlayerInternals.useElementSize(drawRef, {
+		triggerOnWindowResize: false,
+		shouldApplyCssTransforms: true,
+	});
+
+	const [canvasMounted, setCanvasMounted] = React.useState(false);
+
+	const onMounted = useCallback(() => {
+		setCanvasMounted(true);
+	}, []);
+
+	const value: CurrentScaleContextType | null = useMemo(() => {
+		if (!size) {
+			return null;
+		}
+
+		return {
+			type: 'canvas-size',
+			canvasSize: size,
+		};
+	}, [size]);
+
+	const MemoRoot = useMemo(() => {
+		return React.memo(Root);
+	}, [Root]);
+
+	const [renderError, setRenderError] = useState<Error | null>(null);
+
+	const clearError = useCallback(() => {
+		setRenderError(null);
+	}, []);
+
+	const compositionRenderErrorContextValue = useMemo(
+		() => ({setError: setRenderError, clearError}),
+		[clearError],
+	);
+
+	const renderErrorContextValue = useMemo(
+		() => ({error: renderError}),
+		[renderError],
+	);
+
+	return (
+		<HigherZIndex onEscape={noop} onOutsideClick={noop}>
+			<TimelineZoomContext>
+				<Internals.CurrentScaleContext.Provider value={value}>
+					<ForceSpecificCursor />
+					<div style={background}>
+						<Internals.CompositionRenderErrorContext.Provider
+							value={compositionRenderErrorContextValue}
+						>
+							{canvasMounted ? <MemoRoot /> : null}
+						</Internals.CompositionRenderErrorContext.Provider>
+						<Internals.CanUseRemotionHooksProvider>
+							<RenderErrorContext.Provider value={renderErrorContextValue}>
+								<EditorContent readOnlyStudio={readOnlyStudio}>
+									<TopPanel
+										drawRef={drawRef}
+										bufferStateDelayInMilliseconds={
+											BUFFER_STATE_DELAY_IN_MILLISECONDS
+										}
+										onMounted={onMounted}
+										readOnlyStudio={readOnlyStudio}
+									/>
+								</EditorContent>
+							</RenderErrorContext.Provider>
+							<GlobalKeybindings />
+						</Internals.CanUseRemotionHooksProvider>
+					</div>
+				</Internals.CurrentScaleContext.Provider>
+				<Modals readOnlyStudio={readOnlyStudio} />
+				<NotificationCenter />
+			</TimelineZoomContext>
+		</HigherZIndex>
+	);
+};

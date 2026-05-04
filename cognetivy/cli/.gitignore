@@ -1,0 +1,18 @@
+node_modules/
+dist/
+src/core/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+
+# cognetivy - ignore runtime data; commit workflows/*/versions/
+.cognetivy/runs/
+.cognetivy/events/
+.cognetivy/collections/
+.cognetivy/node-results/
+
+# Cognetivy
+.cognetivy/skills/.cache

@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "swipe-hook.schema.json",
+  "title": "Swipe Hook",
+  "description": "A competitor hook saved from transcript dissection as inspiration reference. NOT for direct copying — used to inform hook structure and energy when running HookGenie.",
+  "type": "object",
+  "required": ["id", "hook_text", "pattern", "why_it_works", "competitor", "platform", "url", "engagement", "saved_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique swipe entry ID (e.g., swipe_20260305_001)"
+    },
+    "hook_text": {
+      "type": "string",
+      "description": "The exact opening words from the competitor's transcript (first 3 seconds / first line)"
+    },
+    "pattern": {
+      "type": "string",
+      "enum": ["contradiction", "specificity", "timeframe_tension", "pov_as_advice", "vulnerable_confession", "pattern_interrupt"],
+      "description": "The HookGenie pattern this hook maps to — identified during dissection"
+    },
+    "why_it_works": {
+      "type": "string",
+      "description": "1-2 sentence analysis from dissection — why this hook drove engagement"
+    },
+    "competitor": {
+      "type": "string",
+      "description": "Competitor name or handle (e.g., 'Chase Hannegan')"
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["youtube_longform", "youtube_shorts", "instagram_reels", "tiktok", "linkedin"],
+      "description": "Platform this content came from"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Direct URL to the source video/reel"
+    },
+    "engagement": {
+      "type": "object",
+      "description": "Engagement stats at time of discovery",
+      "required": ["views"],
+      "properties": {
+        "views": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "likes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "comments": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "engagement_rate": {
+          "type": "number",
+          "description": "Calculated engagement rate as percentage"
+        }
+      }
+    },
+    "competitor_angle": {
+      "type": "string",
+      "description": "The contrast or angle the competitor used, if identifiable"
+    },
+    "topic_keywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "3-6 keywords from the hook and content — used by /viral:script for relevance matching"
+    },
+    "source_video_title": {
+      "type": "string",
+      "description": "The video title or first 100 chars of caption"
+    },
+    "saved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "used_count": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "How many times this swipe hook has influenced a /viral:script run"
+    },
+    "visual_hook": {
+      "type": "object",
+      "description": "Visual hook analysis from video frame extraction (populated by /viral:discover Step 4)",
+      "properties": {
+        "on_screen": {
+          "type": "string",
+          "description": "What appears on screen in first 3 seconds"
+        },
+        "text_overlays": {
+          "type": "string",
+          "description": "Any text overlaid on the video"
+        },
+        "visual_type": {
+          "type": "string",
+          "enum": ["talking_head", "screen_recording", "split_screen", "b_roll", "text_only", "branded_graphic", "other"],
+          "description": "Primary visual style"
+        },
+        "pattern_interrupt": {
+          "type": "boolean",
+          "description": "Whether the visual breaks expected scroll patterns"
+        },
+        "pacing": {
+          "type": "string",
+          "enum": ["fast", "moderate", "slow"],
+          "description": "Editing pace in the first 3-5 seconds"
+        }
+      }
+    },
+    "notes": {
+      "type": "string",
+      "default": ""
+    }
+  },
+  "additionalProperties": false
+}

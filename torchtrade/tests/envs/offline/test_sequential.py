@@ -1,0 +1,1040 @@
+"""
+Consolidated tests for SequentialTradingEnv (unified spot/futures environment).
+
+This file consolidates tests from:
+- test_seqlongonly.py (spot trading)
+- test_seqfutures.py (futures trading)
+
+Uses parametrization to test both trading modes with maximum code reuse.
+"""
+
+import pandas as pd
+import pytest
+import torch
+
+from torchtrade.envs.offline import SequentialTradingEnv, SequentialTradingEnvConfig
+from torchtrade.envs.utils.timeframe import TimeFrame, TimeFrameUnit
+from tests.conftest import simple_feature_fn, validate_account_state
+
+
+@pytest.fixture
+def unified_env(sample_ohlcv_df, trading_mode, unified_config_spot, unified_config_futures):
+    """Create unified environment for testing (spot or futures based on parameter)."""
+    config = unified_config_spot if trading_mode == 1 else unified_config_futures
+    env_instance = SequentialTradingEnv(
+        df=sample_ohlcv_df,
+        config=config,
+        feature_preprocessing_fn=simple_feature_fn,
+    )
+    yield env_instance
+    env_instance.close()
+
+
+# ============================================================================
+# INITIALIZATION TESTS
+# ============================================================================
+
+
+class TestSequentialEnvInitialization:
+    """Tests for environment initialization (both spot and futures)."""
+
+    def test_env_initializes(self, unified_env, trading_mode):
+        """Environment should initialize without errors."""
+        assert unified_env is not None
+        assert unified_env.leverage == trading_mode
+    @pytest.mark.parametrize("action_levels,expected_actions", [
+        ([0, 1], 2),                  # Custom: flat/long
+        ([-1, 0, 1], 3),              # Default: short/flat/long
+        ([-1, -0.5, 0, 0.5, 1], 5),  # Custom: 5 levels
+    ])
+    def test_action_spec(self, sample_ohlcv_df, action_levels, expected_actions):
+        """Action spec should match action_levels."""
+        config = SequentialTradingEnvConfig(
+            action_levels=action_levels,
+            initial_cash=1000,
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        assert env.action_spec.n == expected_actions
+        assert env.action_levels == action_levels
+        env.close()
+
+    def test_default_action_levels(self, sample_ohlcv_df):
+        """Default action_levels should be [-1, 0, 1]."""
+        config = SequentialTradingEnvConfig(initial_cash=1000)
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        assert env.action_levels == [-1, 0, 1]
+        assert env.action_spec.n == 3
+        env.close()
+
+    def test_observation_spec_has_account_state(self, unified_env):
+        """Observation spec should include account_state."""
+        assert "account_state" in unified_env.observation_spec.keys()
+
+    def test_observation_spec_has_market_data(self, unified_env):
+        """Observation spec should include market data keys."""
+        assert len(unified_env.market_data_keys) > 0
+        for key in unified_env.market_data_keys:
+            assert key in unified_env.observation_spec.keys()
+
+    @pytest.mark.parametrize("invalid_fee", [-0.1, 1.5])
+    def test_invalid_transaction_fee_raises(self, sample_ohlcv_df, trading_mode, invalid_fee):
+        """Should raise error for invalid transaction fee."""
+        config = SequentialTradingEnvConfig(
+            leverage=trading_mode,
+            transaction_fee=invalid_fee,
+        )
+        with pytest.raises(ValueError, match="Transaction fee"):
+            SequentialTradingEnv(sample_ohlcv_df, config)
+
+    @pytest.mark.parametrize("invalid_slippage", [-0.1, 1.5])
+    def test_invalid_slippage_raises(self, sample_ohlcv_df, trading_mode, invalid_slippage):
+        """Should raise error for invalid slippage."""
+        config = SequentialTradingEnvConfig(
+            leverage=trading_mode,
+            slippage=invalid_slippage,
+        )
+        with pytest.raises(ValueError, match="Slippage"):
+            SequentialTradingEnv(sample_ohlcv_df, config)
+
+    def test_leverage_validation_futures(self, sample_ohlcv_df):
+        """Futures mode should require leverage >= 1."""
+        with pytest.raises(ValueError, match="[Ll]everage"):
+            config = SequentialTradingEnvConfig(leverage=0.5)
+            SequentialTradingEnv(sample_ohlcv_df, config)
+
+    @pytest.mark.parametrize("action_levels,leverage,should_warn", [
+        ([-1, 0, 1], 1, True),   # Negative actions + spot = warn
+        ([-1, 0, 1], 2, False),  # Negative actions + futures = no warn
+        ([0, 0.5, 1], 1, False), # No negative actions + spot = no warn
+    ])
+    def test_negative_action_levels_spot_warning(
+        self, sample_ohlcv_df, action_levels, leverage, should_warn
+    ):
+        """Warn when negative action_levels are used with leverage=1 (spot mode)."""
+        import warnings
+
+        config = SequentialTradingEnvConfig(
+            action_levels=action_levels,
+            leverage=leverage,
+            initial_cash=1000,
+        )
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+            env.close()
+
+            # Filter to our specific warning (ignore unrelated warnings)
+            our_warnings = [x for x in w if "Negative action_levels" in str(x.message)]
+
+            if should_warn:
+                assert len(our_warnings) == 1
+                assert "leverage=1" in str(our_warnings[0].message)
+            else:
+                assert len(our_warnings) == 0
+
+
+# ============================================================================
+# RESET TESTS
+# ============================================================================
+
+
+class TestSequentialEnvReset:
+    """Tests for environment reset (both spot and futures)."""
+
+    def test_reset_returns_tensordict(self, unified_env):
+        """Reset should return a TensorDict."""
+        td = unified_env.reset()
+        assert td is not None
+        assert hasattr(td, "keys")
+
+    def test_reset_initializes_balance(self, unified_env, trading_mode):
+        """Reset should initialize balance correctly."""
+        td = unified_env.reset()
+        account_state = td["account_state"]
+        validate_account_state(account_state, trading_mode)
+
+        # Check initial state (exposure should be 0 when no position)
+        # Element 0: exposure_pct should be 0 at start (no position)
+        assert account_state[0] == 0.0, "Exposure should be 0 at start"
+        # Verify internal balance is set correctly
+        assert unified_env.balance == unified_env.initial_cash
+
+    def test_reset_clears_position(self, unified_env):
+        """Reset should clear any existing position."""
+        # First, take a position
+        td = unified_env.reset()
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(1 if unified_env.leverage == 1 else 2)  # Long
+        unified_env.step(action_td)
+
+        # Now reset
+        td_reset = unified_env.reset()
+        account_state = td_reset["account_state"]
+        # Element 1: position_direction should be 0 after reset (no position)
+        assert account_state[1] == 0.0, "Position direction should be 0 after reset"
+
+
+# ============================================================================
+# STEP TESTS
+# ============================================================================
+
+
+class TestSequentialEnvStep:
+    """Tests for environment step (both spot and futures)."""
+
+    def test_step_returns_tensordict(self, unified_env):
+        """Step should return a TensorDict."""
+        td = unified_env.reset()
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(0)
+        next_td = unified_env.step(action_td)
+        assert next_td is not None
+        assert hasattr(next_td, "keys")
+
+    def test_step_has_next_keys(self, unified_env):
+        """Step output should have 'next' nested keys."""
+        td = unified_env.reset()
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(0)
+        next_td = unified_env.step(action_td)
+
+        assert "next" in next_td.keys()
+        assert "account_state" in next_td["next"].keys()
+        assert "reward" in next_td["next"].keys()
+        assert "done" in next_td["next"].keys()
+
+    def test_same_action_preserves_position_size(self, unified_env):
+        """Repeating same action should keep similar position size (not exact due to price changes)."""
+        td = unified_env.reset()
+
+        # Take initial position
+        action_td = td.clone()
+        buy_action = 1 if unified_env.leverage == 1 else 2  # Buy/Long (100%)
+        action_td["action"] = torch.tensor(buy_action)
+        next_td = unified_env.step(action_td)
+
+        position_before = next_td["next"]["account_state"][1]
+
+        # Repeat same action (should try to maintain same position percentage)
+        action_td_repeat = next_td["next"].clone()
+        action_td_repeat["action"] = torch.tensor(buy_action)
+        next_td_repeat = unified_env.step(action_td_repeat)
+
+        position_after = next_td_repeat["next"]["account_state"][1]
+        # Position should be approximately the same sign and magnitude
+        # (exact match depends on price movement and rebalancing logic)
+        assert position_before * position_after >= 0, "Position sign should be same"
+        assert torch.isclose(position_before.abs(), position_after.abs(), rtol=0.15)
+
+
+# ============================================================================
+# TRADE EXECUTION TESTS
+# ============================================================================
+
+
+class TestSequentialEnvTradeExecution:
+    """Tests for trade execution (spot and futures specific behavior)."""
+
+    @pytest.mark.parametrize("action_levels,leverage,open_action_idx,expected_direction", [
+        ([0, 1], 1, 1, 1),            # Spot: buy -> long (+1)
+        ([-1, 0, 1], 2, 2, 1),        # Futures: long -> long (+1)
+        ([-1, 0, 1], 2, 0, -1),       # Futures: short -> short (-1)
+    ])
+    def test_open_position(self, sample_ohlcv_df, action_levels, leverage, open_action_idx, expected_direction):
+        """Opening a position should set correct position_direction."""
+        config = SequentialTradingEnvConfig(
+            action_levels=action_levels,
+            leverage=leverage,
+            initial_cash=1000,
+            transaction_fee=0.0,  # Avoid floating point precision issues
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Open position
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(open_action_idx)
+        next_td = env.step(action_td)
+
+        account_state = next_td["next"]["account_state"]
+        # Element 1: position_direction
+        if expected_direction > 0:
+            assert account_state[1] > 0, f"Should have positive direction after long, got {account_state[1]}"
+        elif expected_direction < 0:
+            assert account_state[1] < 0, f"Should have negative direction after short, got {account_state[1]}"
+        env.close()
+
+    @pytest.mark.parametrize("action_levels,open_idx,close_idx", [
+        ([0, 1], 1, 0),           # Spot: buy then sell
+        ([-1, 0, 1], 2, 1),       # Futures: long then close
+        ([-1, 0, 1], 0, 1),       # Futures: short then close
+    ])
+    def test_close_position(self, sample_ohlcv_df, action_levels, open_idx, close_idx):
+        """Closing a position should set position_direction to 0."""
+        config = SequentialTradingEnvConfig(
+            action_levels=action_levels,
+            initial_cash=1000,
+            transaction_fee=0.0,  # Avoid floating point precision issues
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Open position
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(open_idx)
+        next_td = env.step(action_td)
+
+        # Close position
+        action_td_close = next_td["next"].clone()
+        action_td_close["action"] = torch.tensor(close_idx)
+        next_td_close = env.step(action_td_close)
+
+        account_state = next_td_close["next"]["account_state"]
+        # Element 1: position_direction should be 0 for no position
+        assert account_state[1] == 0.0, "Position direction should be 0 after close"
+        env.close()
+
+
+# ============================================================================
+# REWARD TESTS
+# ============================================================================
+
+
+class TestSequentialEnvReward:
+    """Tests for reward calculation (both modes)."""
+
+    def test_reward_on_no_position(self, unified_env):
+        """Reward should be 0 when holding cash (no position)."""
+        td = unified_env.reset()
+        action_td = td.clone()
+        # For both modes: action 0 for spot is 0.0 (close), action 2 for futures is 0.0 (close)
+        close_action = 0 if unified_env.leverage == 1 else 1
+        action_td["action"] = torch.tensor(close_action)
+        next_td = unified_env.step(action_td)
+
+        reward = next_td["next"]["reward"]
+        assert reward == 0.0, "Reward should be 0 when holding cash"
+
+    @pytest.mark.parametrize("action_levels,position_action_idx", [
+        ([0, 1], 1),           # Spot: long position
+        ([-1, 0, 1], 2),       # Futures: long position
+        ([-1, 0, 1], 0),       # Futures: short position
+    ])
+    def test_reward_reflects_pnl(self, sample_ohlcv_df, action_levels, position_action_idx):
+        """Reward should reflect position P&L for both long and short positions."""
+        config = SequentialTradingEnvConfig(
+            action_levels=action_levels,
+            initial_cash=1000,
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Open position
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(position_action_idx)
+        next_td = env.step(action_td)
+
+        # Take another step (position should have P&L)
+        action_td_hold = next_td["next"].clone()
+        action_td_hold["action"] = torch.tensor(position_action_idx)  # Hold position
+        next_td_hold = env.step(action_td_hold)
+
+        # Reward should be based on price change
+        reward = next_td_hold["next"]["reward"]
+        assert isinstance(reward.item(), float)
+        env.close()
+
+
+# ============================================================================
+# TERMINATION TESTS
+# ============================================================================
+
+
+class TestSequentialEnvTermination:
+    """Tests for episode termination (both modes)."""
+
+    def test_terminates_within_max_length(self, unified_env):
+        """Episode should terminate within max trajectory length."""
+        # Set a reasonable max length
+        if hasattr(unified_env, 'max_traj_length'):
+            unified_env.max_traj_length = 15
+        elif hasattr(unified_env, 'config') and hasattr(unified_env.config, 'max_traj_length'):
+            unified_env.config.max_traj_length = 15
+
+        td = unified_env.reset()
+        close_action = 0 if unified_env.leverage == 1 else 1
+
+        # Step up to max_traj_length times
+        for i in range(15):
+            action_td = td.clone()
+            action_td["action"] = torch.tensor(close_action)
+            td = unified_env.step(action_td)
+            if td["next"]["done"].item():
+                break
+
+        # Should have terminated within the limit
+        assert i <= 15, "Should terminate within max_traj_length"
+
+    def test_terminates_at_data_end(self, sample_ohlcv_df):
+        """Episode should terminate when reaching end of data."""
+        config = SequentialTradingEnvConfig(
+            leverage=1,
+            initial_cash=1000,
+            max_traj_length=10000,  # Very large
+            random_start=False,
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Step until done
+        max_steps = len(sample_ohlcv_df) + 100
+        for i in range(max_steps):
+            if "next" in td.keys() and td["next"].get("done", torch.tensor(False)).item():
+                break
+            action_td = td.clone()
+            action_td["action"] = torch.tensor(0)  # Close action for spot
+            td = env.step(action_td)
+
+        assert i < max_steps, "Should terminate before max_steps"
+        env.close()
+
+    def test_liquidation_futures(self, sample_ohlcv_df, trending_down_df):
+        """Futures: Should terminate on liquidation or max steps."""
+        config = SequentialTradingEnvConfig(
+            leverage=20,  # Very high leverage for easier liquidation
+            initial_cash=1000,
+            max_traj_length=200,  # Lower max to ensure termination
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],  # Use small timeframe for limited data
+            window_sizes=[10],
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+        )
+        env = SequentialTradingEnv(trending_down_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Open long position on downtrend (should eventually liquidate or hit max)
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(2)  # Long (futures: [-1, 0, 1])
+        td = env.step(action_td)
+
+        # Continue stepping with same action (keep long position)
+        terminated = False
+        for _ in range(200):
+            if td["next"]["done"].item():
+                terminated = True
+                break
+            action_td = td["next"].clone()
+            action_td["action"] = torch.tensor(2)  # Keep long position (futures: [-1, 0, 1])
+            td = env.step(action_td)
+
+        # Should have terminated (either liquidation, max length, or out of data)
+        assert terminated, "Episode should terminate"
+        env.close()
+
+    def test_liquidation_short_position_uptrend(self, sample_ohlcv_df, trending_up_df):
+        """Short position should liquidate on uptrend (symmetric to long liquidation test)."""
+        config = SequentialTradingEnvConfig(
+            leverage=20,  # Very high leverage for easier liquidation
+            action_levels=[-1, 0, 1],  # Need short actions
+            initial_cash=1000,
+            max_traj_length=200,
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],
+            window_sizes=[10],
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+        )
+        env = SequentialTradingEnv(trending_up_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Open short position on uptrend (should eventually liquidate or hit max)
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(0)  # Short (action_levels: [-1, 0, 1])
+        td = env.step(action_td)
+
+        # Verify short position was opened
+        assert env.position.position_size < 0, "Should have opened short position"
+
+        # Continue stepping with same action (keep short position)
+        terminated = False
+        for _ in range(200):
+            if td["next"]["done"].item():
+                terminated = True
+                break
+            action_td = td["next"].clone()
+            action_td["action"] = torch.tensor(0)  # Keep short position
+            td = env.step(action_td)
+
+        # Should have terminated (either liquidation, max length, or out of data)
+        assert terminated, "Episode should terminate"
+        env.close()
+
+    @pytest.mark.parametrize("direction,action_idx,bar12_field,bar12_value,liq_lo,liq_hi", [
+        ("long", 2, "low", 85.0, 90.0, 91.0),     # low wick below liq ~90.4
+        ("short", 0, "high", 115.0, 109.0, 110.0), # high wick above liq ~109.6
+    ], ids=["long-low-wick", "short-high-wick"])
+    def test_liquidation_intrabar_wick(self, sample_ohlcv_df, direction, action_idx,
+                                       bar12_field, bar12_value, liq_lo, liq_hi):
+        """Regression: intrabar wick that recovers must still trigger liquidation.
+
+        Long: bar has low=85 but close=100. Liq ~90.4 → low triggers liquidation.
+        Short: bar has high=115 but close=100. Liq ~109.6 → high triggers liquidation.
+        """
+        import numpy as np
+
+        n = 50
+        timestamps = pd.date_range("2024-01-01", periods=n, freq="1min")
+        prices = np.full(n, 100.0)
+
+        df = pd.DataFrame({
+            "timestamp": timestamps,
+            "open": prices.copy(),
+            "high": prices + 1.0,
+            "low": prices - 1.0,
+            "close": prices.copy(),
+            "volume": np.ones(n) * 1000,
+        })
+        # Bar 12: intrabar wick, but close recovers to 100
+        df.loc[12, bar12_field] = bar12_value
+
+        config = SequentialTradingEnvConfig(
+            leverage=10,
+            initial_cash=10000,
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],
+            window_sizes=[10],
+            transaction_fee=0.0,
+            slippage=0.0,
+            seed=42,
+            max_traj_length=100,
+            random_start=False,
+        )
+        env = SequentialTradingEnv(df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Step 1: Open position with 10x leverage at close=100
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(action_idx)
+        td = env.step(action_td)
+
+        assert env.position.position_size != 0, "Position should be open"
+        liq_price = env.liquidation_price
+        assert liq_lo < liq_price < liq_hi, f"Liq price should be ~{(liq_lo+liq_hi)/2}, got {liq_price}"
+
+        # Step 2: Hold — sampler advances to bar 12 (wick but close=100)
+        hold_td = td["next"].clone()
+        hold_td["action"] = torch.tensor(1)  # Hold
+        td = env.step(hold_td)
+
+        # Position MUST be liquidated by the intrabar wick
+        assert env.position.position_size == 0, (
+            f"{direction} position should be liquidated by intrabar wick "
+            f"({bar12_field}={bar12_value} vs liq={liq_price}), "
+            f"but position_size={env.position.position_size}"
+        )
+
+        env.close()
+
+
+# ============================================================================
+# EDGE CASES
+# ============================================================================
+
+
+class TestSequentialEnvEdgeCases:
+    """Tests for edge cases and boundary conditions."""
+
+    @pytest.mark.parametrize("invalid_cash", [0, -100, -1])
+    def test_invalid_initial_cash_handled(self, sample_ohlcv_df, trading_mode, invalid_cash):
+        """Invalid initial cash should either raise error or be handled gracefully."""
+        # Some implementations may allow 0 or negative initial cash for testing purposes
+        # The key is that the environment should handle it without crashing
+        try:
+            config = SequentialTradingEnvConfig(
+                leverage=trading_mode,
+                initial_cash=invalid_cash,
+            )
+            env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+            # If it doesn't raise, that's acceptable - environment handles it gracefully
+            # Just verify it can reset
+            td = env.reset()
+            assert td is not None
+            env.close()
+        except (ValueError, AssertionError):
+            # Also acceptable - strict validation rejected invalid cash
+            pass
+
+    def test_insufficient_data_raises(self, trading_mode):
+        """Should raise error if DataFrame is too small."""
+        tiny_df = pd.DataFrame({
+            "timestamp": pd.date_range("2024-01-01", periods=5, freq="1min"),
+            "open": [100.0] * 5,
+            "high": [101.0] * 5,
+            "low": [99.0] * 5,
+            "close": [100.0] * 5,
+            "volume": [1000.0] * 5,
+        })
+
+        config = SequentialTradingEnvConfig(
+            leverage=trading_mode,
+            window_sizes=[10],  # Requires 10+ rows
+        )
+
+        with pytest.raises((ValueError, IndexError)):
+            env = SequentialTradingEnv(tiny_df, config, simple_feature_fn)
+            env.reset()
+
+    @pytest.mark.parametrize("action_levels,fee,open_idx,close_idx", [
+        ([0, 1], 0.001, 1, 0),        # Spot: 0.1% fee
+        ([0, 1], 0.01, 1, 0),         # Spot: 1% fee
+        ([-1, 0, 1], 0.001, 2, 1),    # Futures long: 0.1% fee
+        ([-1, 0, 1], 0.001, 0, 1),    # Futures short: 0.1% fee
+    ])
+    def test_transaction_costs_reduce_cash(self, sample_ohlcv_df, action_levels, fee, open_idx, close_idx):
+        """Transaction fees should reduce available cash."""
+        config = SequentialTradingEnvConfig(
+            action_levels=action_levels,
+            initial_cash=1000,
+            transaction_fee=fee,
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+        initial_cash = td["account_state"][0].item()
+
+        # Open position
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(open_idx)
+        next_td = env.step(action_td)
+
+        # Close position
+        action_td_sell = next_td["next"].clone()
+        action_td_sell["action"] = torch.tensor(close_idx)
+        next_td_sell = env.step(action_td_sell)
+
+        final_cash = next_td_sell["next"]["account_state"][0].item()
+
+        # Should have less cash due to fees (unless position made huge profit)
+        # At minimum, fees were charged (allow small profit margin)
+        assert final_cash <= initial_cash + 100  # Allow some profit but fees should impact
+        env.close()
+
+
+# ============================================================================
+# REGRESSION TESTS
+# ============================================================================
+
+
+class TestSequentialEnvRegression:
+    """Regression tests for known issues."""
+
+    @pytest.mark.parametrize("key,expected_shape,expected_dtype", [
+        ("account_state", (6,), torch.float32),
+        ("done", (1,), torch.bool),
+        ("reward", (1,), torch.float32),
+    ])
+    def test_output_shapes_and_types(self, unified_env, key, expected_shape, expected_dtype):
+        """Step outputs should have consistent shapes and types."""
+        td = unified_env.reset()
+
+        # Check initial state for account_state
+        if key == "account_state":
+            assert td[key].shape[-1] == expected_shape[0]
+            if expected_dtype:
+                assert td[key].dtype == expected_dtype
+
+        # After step
+        action_td = td.clone()
+        close_action = 0 if unified_env.leverage == 1 else 1
+        action_td["action"] = torch.tensor(close_action)
+        next_td = unified_env.step(action_td)
+
+        # Check next state
+        if key == "account_state":
+            assert next_td["next"][key].shape[-1] == expected_shape[0]
+        else:
+            value = next_td["next"][key]
+            if expected_shape:
+                assert value.shape == expected_shape, f"{key}: expected shape {expected_shape}, got {value.shape}"
+            if expected_dtype:
+                assert value.dtype == expected_dtype
+
+    @pytest.mark.parametrize("leverage,action_levels,hold_action", [
+        (1, [0, 1], 0),           # Spot
+        (10, [-1, 0, 1], 1),      # Futures
+    ], ids=["spot", "futures"])
+    def test_truncation_does_not_set_terminated(self, sample_ohlcv_df, leverage, action_levels, hold_action):
+        """Truncated episodes (data exhaustion/max steps) must NOT set terminated=True.
+
+        Regression test for #150: terminated included truncated, breaking
+        value bootstrapping in all sequential envs.
+        """
+        config = SequentialTradingEnvConfig(
+            leverage=leverage,
+            action_levels=action_levels,
+            max_traj_length=5000,  # Larger than data so episode truncates
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],
+            window_sizes=[10],
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+
+        for _ in range(5000):
+            action_td = td["next"].clone() if "next" in td.keys() else td.clone()
+            action_td["action"] = torch.tensor(hold_action)
+            td = env.step(action_td)
+            if td["next"]["done"].item():
+                break
+
+        assert td["next"]["done"].item() is True
+        assert td["next"]["truncated"].item() is True
+        assert td["next"]["terminated"].item() is False, (
+            "Truncated episode should have terminated=False (issue #150)"
+        )
+        env.close()
+
+    @pytest.mark.parametrize("leverage,action_levels,hold_action", [
+        (1, [0, 1], 0),           # Spot
+        (10, [-1, 0, 1], 1),      # Futures
+    ], ids=["spot", "futures"])
+    def test_truncation_respects_per_episode_length_with_random_start(
+        self, sample_ohlcv_df, leverage, action_levels, hold_action
+    ):
+        """Truncation must use per-episode max_traj_length, not fixed max_steps.
+
+        Regression test for #158: _check_truncation used self.max_steps (set once
+        at init) instead of self.max_traj_length (updated per episode), causing
+        incorrect episode boundaries with random_start=True.
+        """
+        max_traj = 20
+        config = SequentialTradingEnvConfig(
+            leverage=leverage,
+            action_levels=action_levels,
+            max_traj_length=max_traj,
+            random_start=True,
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],
+            window_sizes=[10],
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+
+        for episode in range(3):
+            td = env.reset()
+            steps = 0
+            for _ in range(max_traj + 10):  # Try to exceed max_traj
+                action_td = td["next"].clone() if "next" in td.keys() else td.clone()
+                action_td["action"] = torch.tensor(hold_action)
+                td = env.step(action_td)
+                steps += 1
+                if td["next"]["done"].item():
+                    break
+
+            assert steps <= max_traj, (
+                f"Episode {episode} ran {steps} steps but max_traj_length={max_traj} (issue #158)"
+            )
+            assert td["next"]["truncated"].item() is True
+        env.close()
+
+    def test_bankruptcy_sets_terminated_not_truncated(self, trending_down_df):
+        """Bankruptcy must set terminated=True, truncated=False.
+
+        Regression test for #150: ensures value bootstrapping does NOT
+        occur at true terminal states (bankruptcy).
+        """
+        config = SequentialTradingEnvConfig(
+            leverage=20,
+            action_levels=[-1, 0, 1],
+            max_traj_length=5000,
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],
+            window_sizes=[10],
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+            transaction_fee=0.0,
+            slippage=0.0,
+        )
+        env = SequentialTradingEnv(trending_down_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Open leveraged long into crashing prices
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(2)  # long
+        td = env.step(action_td)
+
+        for _ in range(500):
+            if td["next"]["done"].item():
+                break
+            action_td = td["next"].clone()
+            action_td["action"] = torch.tensor(2)  # keep long
+            td = env.step(action_td)
+
+        assert td["next"]["done"].item() is True
+        assert td["next"]["terminated"].item() is True
+        assert td["next"]["truncated"].item() is False, (
+            "Bankruptcy should have truncated=False (issue #150)"
+        )
+        env.close()
+
+    def test_normal_step_signals(self, unified_env):
+        """Normal (non-terminal) step: terminated=False, truncated=False, done=False.
+
+        Regression test for #150.
+        """
+        td = unified_env.reset()
+        close_action = 0 if unified_env.leverage == 1 else 1
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(close_action)
+        td = unified_env.step(action_td)
+
+        assert td["next"]["terminated"].item() is False
+        assert td["next"]["truncated"].item() is False
+        assert td["next"]["done"].item() is False
+
+    def test_check_env_specs_passes(self, unified_env):
+        """check_env_specs must pass — specs must match actual output shapes."""
+        from torchrl.envs.utils import check_env_specs
+        check_env_specs(unified_env)
+
+    @pytest.mark.parametrize("action_levels,leverage,repeat_action_idx", [
+        ([0, 1], 1, 1),            # Spot: repeat buy (long)
+        ([-1, 0, 1], 5, 2),        # Futures: repeat long
+        ([-1, 0, 1], 5, 0),        # Futures: repeat short
+    ], ids=["spot-long", "futures-long", "futures-short"])
+    def test_repeated_action_does_not_rebalance(
+        self, sample_ohlcv_df, action_levels, leverage, repeat_action_idx
+    ):
+        """Repeating the same action should hold, not rebalance.
+
+        Regression test for #187: fractional position sizing recalculated
+        target from drifting portfolio_value, causing constant-leverage
+        rebalancing (close_partial / increase) when the agent repeated
+        the same action.
+        """
+        config = SequentialTradingEnvConfig(
+            action_levels=action_levels,
+            leverage=leverage,
+            initial_cash=1000,
+            transaction_fee=0.0,
+            slippage=0.0,
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],
+            window_sizes=[10],
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Step 1: open position
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(repeat_action_idx)
+        td = env.step(action_td)
+
+        position_after_open = env.position.position_size
+        assert position_after_open != 0, "Position should have opened"
+
+        # Steps 2-50: repeat same action — position size must not change
+        trades_executed = 0
+        for _ in range(49):
+            action_td = td["next"].clone()
+            action_td["action"] = torch.tensor(repeat_action_idx)
+            td = env.step(action_td)
+            if td["next"]["done"].item():
+                break
+            if env.position.position_size != position_after_open:
+                trades_executed += 1
+
+        assert trades_executed == 0, (
+            f"Repeating the same action should hold, not rebalance. "
+            f"Position changed {trades_executed} times (issue #187)"
+        )
+        env.close()
+
+    @pytest.mark.parametrize("action_levels,leverage,open_idx,close_idx", [
+        ([0, 1], 1, 1, 0),            # Spot: long then sell
+        ([-1, 0, 1], 5, 2, 1),        # Futures: long then close
+        ([-1, 0, 1], 5, 0, 1),        # Futures: short then close
+    ], ids=["spot-close", "futures-close-long", "futures-close-short"])
+    def test_action_change_after_repeated_holds_still_executes(
+        self, sample_ohlcv_df, action_levels, leverage, open_idx, close_idx
+    ):
+        """Changing action after repeated holds must still execute.
+
+        Regression test for #187: ensures the _prev_action_value guard
+        does not accidentally lock agents into positions they cannot exit.
+        """
+        config = SequentialTradingEnvConfig(
+            action_levels=action_levels,
+            leverage=leverage,
+            initial_cash=1000,
+            transaction_fee=0.0,
+            slippage=0.0,
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],
+            window_sizes=[10],
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+        )
+        env = SequentialTradingEnv(sample_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+
+        # Open position and repeat for 10 steps
+        action_td = td.clone()
+        action_td["action"] = torch.tensor(open_idx)
+        td = env.step(action_td)
+        assert env.position.position_size != 0, "Position should have opened"
+
+        for _ in range(10):
+            action_td = td["next"].clone()
+            action_td["action"] = torch.tensor(open_idx)
+            td = env.step(action_td)
+
+        # Now close — must actually execute
+        action_td = td["next"].clone()
+        action_td["action"] = torch.tensor(close_idx)
+        td = env.step(action_td)
+
+        assert env.position.position_size == 0, (
+            "Position should have closed after action change (issue #187)"
+        )
+        env.close()
+
+
+# ============================================================================
+# PER-TIMEFRAME FEATURE PROCESSING TESTS (Issue #177)
+# ============================================================================
+
+
+class TestPerTimeframeFeatures:
+    """Tests for per-timeframe feature processing at environment level."""
+
+    @pytest.fixture
+    def multi_tf_df(self):
+        """Create OHLCV data for multi-timeframe testing."""
+        import numpy as np
+        n_minutes = 500
+        start_time = pd.Timestamp("2024-01-01 00:00:00")
+        timestamps = pd.date_range(start=start_time, periods=n_minutes, freq="1min")
+
+        close_prices = np.array([100.0 + i for i in range(n_minutes)])
+        return pd.DataFrame({
+            "timestamp": timestamps,
+            "open": close_prices - 0.5,
+            "high": close_prices + 1.0,
+            "low": close_prices - 1.0,
+            "close": close_prices,
+            "volume": np.ones(n_minutes) * 1000,
+        })
+
+    def test_env_with_different_feature_dimensions(self, multi_tf_df):
+        """Environment should work with different feature dimensions per timeframe.
+
+        Verifies: spec shapes, reset shapes, and shape consistency over 30 steps.
+        """
+        def process_1min(df):
+            """3 features."""
+            df = df.copy().reset_index(drop=False)
+            df["features_close"] = df["close"]
+            df["features_volume"] = df["volume"]
+            df["features_range"] = df["high"] - df["low"]
+            return df
+
+        def process_5min(df):
+            """5 features."""
+            df = df.copy().reset_index(drop=False)
+            df["features_close"] = df["close"]
+            df["features_sma"] = df["close"].rolling(3).mean().fillna(df["close"])
+            df["features_vol"] = df["close"].pct_change().rolling(3).std().fillna(0)
+            df["features_volume"] = df["volume"]
+            df["features_vma"] = df["volume"].rolling(3).mean().fillna(df["volume"])
+            return df
+
+        config = SequentialTradingEnvConfig(
+            time_frames=[
+                TimeFrame(1, TimeFrameUnit.Minute),
+                TimeFrame(5, TimeFrameUnit.Minute),
+            ],
+            window_sizes=[10, 5],
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+            initial_cash=10000,
+            max_traj_length=50,
+            random_start=False,
+        )
+        env = SequentialTradingEnv(
+            multi_tf_df,
+            config,
+            feature_preprocessing_fn=[process_1min, process_5min],
+        )
+
+        expected_1min_shape = (10, 3)
+        expected_5min_shape = (5, 5)
+
+        # Check observation spec shapes
+        obs_spec = env.observation_spec
+        assert obs_spec["market_data_1Minute_10"].shape == expected_1min_shape
+        assert obs_spec["market_data_5Minute_5"].shape == expected_5min_shape
+
+        # Reset and check actual observation shapes
+        td = env.reset()
+        assert td["market_data_1Minute_10"].shape == expected_1min_shape
+        assert td["market_data_5Minute_5"].shape == expected_5min_shape
+
+        # Run through multiple steps and verify shapes remain consistent
+        for step in range(30):
+            action_td = td["next"].clone() if "next" in td.keys() else td.clone()
+            action_td["action"] = torch.tensor(1)  # Hold flat
+            td = env.step(action_td)
+
+            assert td["next"]["market_data_1Minute_10"].shape == expected_1min_shape, \
+                f"Step {step}: 1min shape mismatch"
+            assert td["next"]["market_data_5Minute_5"].shape == expected_5min_shape, \
+                f"Step {step}: 5min shape mismatch"
+
+            if td["next"]["done"].item():
+                break
+
+        env.close()
+
+
+# ============================================================================
+# SAMPLER EXHAUSTION TESTS (Issue #204)
+# ============================================================================
+
+
+class TestSamplerExhaustion:
+    """Verify _step gracefully terminates when the sampler is exhausted."""
+
+    @pytest.mark.parametrize("leverage", [1, 10], ids=["spot", "futures"])
+    def test_step_after_sampler_exhausted_does_not_crash(self, short_ohlcv_df, leverage):
+        """Stepping past the sampler's last timestamp must return done=True,
+        not raise ValueError (issue #204)."""
+        config = SequentialTradingEnvConfig(
+            leverage=leverage,
+            initial_cash=1000,
+            execute_on=TimeFrame(1, TimeFrameUnit.Minute),
+            time_frames=[TimeFrame(1, TimeFrameUnit.Minute)],
+            window_sizes=[10],
+            transaction_fee=0.0,
+            slippage=0.0,
+            seed=42,
+            max_traj_length=9999,  # Large enough so sampler exhausts first
+            random_start=False,
+        )
+        env = SequentialTradingEnv(short_ohlcv_df, config, simple_feature_fn)
+        td = env.reset()
+        hold_action = 1  # flat action index (action_levels[-1,0,1] → index 1 = 0)
+
+        # Step until done
+        for _ in range(200):
+            action_td = td["next"].clone() if "next" in td.keys() else td.clone()
+            action_td["action"] = torch.tensor(hold_action)
+            td = env.step(action_td)
+            if td["next"]["done"].item():
+                break
+
+        # Env MUST be done by now (sampler exhausted)
+        assert td["next"]["done"].item()
+        assert td["next"]["truncated"].item()
+
+        # The critical test: one MORE step must not crash
+        extra_td = td["next"].clone()
+        extra_td["action"] = torch.tensor(hold_action)
+        result = env.step(extra_td)
+
+        assert result["next"]["done"].item()
+        assert result["next"]["truncated"].item()
+        assert not result["next"]["terminated"].item()
+
+        env.close()
