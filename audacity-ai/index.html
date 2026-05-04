@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audacity AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: auto; }
+
+    body {
+      background: #030610;
+      overflow-x: hidden;
+      font-family: 'Orbitron', sans-serif;
+    }
+
+    /* ── Canvas ── */
+    #bg {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+    }
+
+    /* ── Scroll space ── */
+    .scroll-body { height: 500vh; }
+
+    /* ── Fixed UI layer ── */
+    .ui {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    /* Scanlines */
+    .ui::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg, transparent, transparent 3px,
+        rgba(0,0,0,0.04) 3px, rgba(0,0,0,0.04) 4px
+      );
+      pointer-events: none;
+    }
+
+    /* ── HUD corners ── */
+    .hud-corner {
+      position: absolute;
+      width: 56px; height: 56px;
+      border-color: rgba(0,245,255,0.35);
+      border-style: solid;
+    }
+    .hud-corner.tl { top: 22px; left: 22px; border-width: 2px 0 0 2px; }
+    .hud-corner.tr { top: 22px; right: 22px; border-width: 2px 2px 0 0; }
+    .hud-corner.bl { bottom: 22px; left: 22px; border-width: 0 0 2px 2px; }
+    .hud-corner.br { bottom: 22px; right: 22px; border-width: 0 2px 2px 0; }
+
+    /* ── Logo bar ── */
+    .logo-bar {
+      position: absolute;
+      top: 28px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; align-items: center; gap: 12px;
+      white-space: nowrap;
+    }
+    .logo-bar .diamond { color: rgba(0,245,255,0.6); font-size: 10px; }
+    .logo-bar span {
+      font-size: 11px; font-weight: 400;
+      letter-spacing: 7px;
+      color: rgba(0,245,255,0.75);
+      text-transform: uppercase;
+    }
+
+    /* ── Status line ── */
+    .status-line {
+      position: absolute;
+      bottom: 30px; left: 50%;
+      transform: translateX(-50%);
+      font-size: 9px; letter-spacing: 5px;
+      color: rgba(0,245,255,0.35);
+      text-transform: uppercase;
+      transition: opacity 0.5s;
+    }
+
+    /* ── Scroll hint ── */
+    .scroll-hint {
+      position: absolute;
+      bottom: 52px; left: 50%;
+      transform: translateX(-50%);
+      font-size: 9px; letter-spacing: 4px;
+      color: rgba(0,245,255,0.45);
+      text-transform: uppercase;
+      animation: blink 2.4s ease-in-out infinite;
+      transition: opacity 0.4s;
+    }
+    @keyframes blink { 0%,100%{opacity:.45} 50%{opacity:1} }
+
+    /* ── Progress rail ── */
+    .progress-rail {
+      position: absolute;
+      right: 26px; top: 50%;
+      transform: translateY(-50%);
+      width: 2px; height: 180px;
+      background: rgba(0,245,255,0.08);
+      border-radius: 2px;
+    }
+    .progress-fill {
+      width: 100%;
+      background: linear-gradient(to bottom, #00f5ff, #ff00aa);
+      border-radius: 2px;
+      height: 0%;
+      transition: height 0.1s;
+    }
+    .progress-label {
+      position: absolute;
+      right: 36px; top: 50%;
+      transform: translateY(-50%) rotate(-90deg);
+      font-size: 8px; letter-spacing: 4px;
+      color: rgba(0,245,255,0.3);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    /* ── Phase texts ── */
+    .phase {
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      will-change: opacity;
+    }
+    .phase.show { opacity: 1; }
+
+    .phase h1 {
+      font-size: clamp(28px, 5.5vw, 76px);
+      font-weight: 900;
+      line-height: 1.05;
+      letter-spacing: 3px;
+      background: linear-gradient(135deg, #00f5ff 0%, #aa44ff 50%, #ff00aa 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 18px;
+    }
+
+    .phase p {
+      font-size: clamp(9px, 1.2vw, 12px);
+      letter-spacing: 5px;
+      color: rgba(0,245,255,0.5);
+      text-transform: uppercase;
+    }
+
+    /* p0: only show eyebrow, not heading overlap with logo */
+    #p0 { top: 50%; }
+    #p0 h1 { font-size: clamp(34px, 6vw, 88px); }
+
+    /* ── Fragment tags (2D labels) ── */
+    .frag-tag {
+      position: absolute;
+      font-size: 8px; letter-spacing: 4px;
+      color: rgba(0,245,255,0);
+      text-transform: uppercase;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      transition: color 0.6s;
+      text-shadow: 0 0 8px rgba(0,245,255,0.8);
+      white-space: nowrap;
+    }
+    .frag-tag.show { color: rgba(0,245,255,0.7); }
+
+    /* ── Data readout ── */
+    .data-readout {
+      position: absolute;
+      top: 50%; left: 26px;
+      transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 8px;
+      opacity: 0; transition: opacity 0.8s;
+    }
+    .data-readout.show { opacity: 1; }
+    .data-row {
+      font-size: 8px; letter-spacing: 3px;
+      color: rgba(0,245,255,0.4);
+      text-transform: uppercase;
+    }
+    .data-row span { color: rgba(0,245,255,0.8); }
+
+    /* ── Final CTA ── */
+    .cta-bar {
+      position: absolute;
+      bottom: 90px; left: 50%;
+      transform: translateX(-50%);
+      opacity: 0;
+      transition: opacity 0.6s;
+      display: flex; gap: 20px;
+      pointer-events: all;
+    }
+    .cta-bar.show { opacity: 1; }
+    .cta-btn {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 10px; letter-spacing: 4px;
+      padding: 14px 32px;
+      border: 1px solid rgba(0,245,255,0.5);
+      color: rgba(0,245,255,0.9);
+      background: rgba(0,245,255,0.06);
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.2s, border-color 0.2s;
+      text-decoration: none;
+    }
+    .cta-btn:hover {
+      background: rgba(0,245,255,0.15);
+      border-color: rgba(0,245,255,0.9);
+    }
+    .cta-btn.solid {
+      background: rgba(0,245,255,0.18);
+      border-color: rgba(0,245,255,0.8);
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="bg"></canvas>
+<div class="scroll-body"></div>
+
+<div class="ui">
+  <!-- HUD -->
+  <div class="hud-corner tl"></div>
+  <div class="hud-corner tr"></div>
+  <div class="hud-corner bl"></div>
+  <div class="hud-corner br"></div>
+
+  <!-- Logo -->
+  <div class="logo-bar">
+    <div class="diamond">◈</div>
+    <span>Audacity AI</span>
+    <div class="diamond">◈</div>
+  </div>
+
+  <!-- Phase texts -->
+  <div class="phase show" id="p0">
+    <h1>AUDACITY<br>AI</h1>
+    <p>The architecture of intelligence</p>
+  </div>
+
+  <div class="phase" id="p1">
+    <h1>EXPAND<br>BEYOND</h1>
+    <p>Intelligence without limits</p>
+  </div>
+
+  <div class="phase" id="p2">
+    <h1>INFINITE<br>GEOMETRY</h1>
+    <p>Every dimension unlocked</p>
+  </div>
+
+  <div class="phase" id="p3">
+    <h1>THE FUTURE<br>IS NOW</h1>
+    <p>Built for what comes next</p>
+  </div>
+
+  <!-- Fragment labels (positioned by JS) -->
+  <div class="frag-tag" id="ft0">Neural</div>
+  <div class="frag-tag" id="ft1">Vision</div>
+  <div class="frag-tag" id="ft2">Core</div>
+  <div class="frag-tag" id="ft3">Logic</div>
+  <div class="frag-tag" id="ft4">Sync</div>
+  <div class="frag-tag" id="ft5">Quantum</div>
+  <div class="frag-tag" id="ft6">Apex</div>
+  <div class="frag-tag" id="ft7">Infinity</div>
+
+  <!-- Data readout left rail -->
+  <div class="data-readout" id="dataReadout">
+    <div class="data-row">NODES &nbsp;<span id="drNodes">0</span></div>
+    <div class="data-row">EDGES &nbsp;<span id="drEdges">0</span></div>
+    <div class="data-row">DIMS &nbsp;<span>∞</span></div>
+    <div class="data-row">STATUS &nbsp;<span>ACTIVE</span></div>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-rail">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+  <div class="progress-label">Progress</div>
+
+  <!-- Scroll hint -->
+  <div class="scroll-hint" id="scrollHint">↓ scroll to expand ↓</div>
+  <div class="status-line" id="statusLine">SYS:NOMINAL · VER:3.14.1 · AI:ONLINE</div>
+
+  <!-- CTA -->
+  <div class="cta-bar" id="ctaBar">
+    <a class="cta-btn solid" href="#">Explore Platform</a>
+    <a class="cta-btn" href="#">View Docs</a>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+// ─────────────────────────────────────────────
+// SETUP
+// ─────────────────────────────────────────────
+const W = window.innerWidth, H = window.innerHeight;
+const canvas = document.getElementById('bg');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(W, H);
+renderer.setClearColor(0x030610, 1);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x030610, 0.035);
+
+const camera = new THREE.PerspectiveCamera(58, W / H, 0.1, 200);
+camera.position.set(0, 1, 13);
+camera.lookAt(0, 0, 0);
+
+// ─────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const remap = (v, a, b, c, d) => c + ((v - a) / (b - a)) * (d - c);
+const easeOut3 = t => 1 - Math.pow(1 - t, 3);
+const easeInOut3 = t => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+const easeOut5 = t => 1 - Math.pow(1 - t, 5);
+
+// ─────────────────────────────────────────────
+// LIGHTS
+// ─────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x050514, 4));
+
+const cyanLight = new THREE.PointLight(0x00f5ff, 6, 30);
+cyanLight.position.set(0, 6, 6);
+scene.add(cyanLight);
+
+const magLight = new THREE.PointLight(0xff00aa, 4, 25);
+magLight.position.set(-6, -4, 4);
+scene.add(magLight);
+
+const goldLight = new THREE.PointLight(0xffcc00, 3, 25);
+goldLight.position.set(6, -4, 4);
+scene.add(goldLight);
+
+// ─────────────────────────────────────────────
+// BACKGROUND GRID (perspective floor + back wall)
+// ─────────────────────────────────────────────
+function makeGrid(size, divs, color, opacity) {
+  const g = new THREE.GridHelper(size, divs, color, color);
+  g.material.transparent = true;
+  g.material.opacity = opacity;
+  return g;
+}
+
+const floorGrid = makeGrid(60, 40, 0x00f5ff, 0.12);
+floorGrid.position.y = -7;
+scene.add(floorGrid);
+
+const backGrid = makeGrid(60, 40, 0x00f5ff, 0.06);
+backGrid.rotation.x = Math.PI / 2;
+backGrid.position.z = -12;
+backGrid.position.y = 0;
+scene.add(backGrid);
+
+// ─────────────────────────────────────────────
+// BACKGROUND STARS
+// ─────────────────────────────────────────────
+const starCount = 1200;
+const starPos = new Float32Array(starCount * 3);
+for (let i = 0; i < starCount; i++) {
+  starPos[i*3]   = (Math.random()-0.5)*80;
+  starPos[i*3+1] = (Math.random()-0.5)*60;
+  starPos[i*3+2] = (Math.random()-0.5)*60 - 10;
+}
+const starGeo = new THREE.BufferGeometry();
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({
+  color: 0xffffff, size: 0.07,
+  transparent: true, opacity: 0.55,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+}));
+scene.add(stars);
+
+// ─────────────────────────────────────────────
+// ORBITING PARTICLES
+// ─────────────────────────────────────────────
+const ptCount = 600;
+const ptPos = new Float32Array(ptCount * 3);
+const ptVel = new Float32Array(ptCount * 3); // orbit angles & radii
+for (let i = 0; i < ptCount; i++) {
+  const r = 3 + Math.random() * 8;
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.random() * Math.PI;
+  ptPos[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+  ptPos[i*3+1] = r * Math.cos(phi);
+  ptPos[i*3+2] = r * Math.sin(phi) * Math.sin(theta);
+  ptVel[i*3]   = r;        // radius
+  ptVel[i*3+1] = theta;    // current angle
+  ptVel[i*3+2] = phi;      // elevation
+}
+const ptGeo = new THREE.BufferGeometry();
+ptGeo.setAttribute('position', new THREE.BufferAttribute(ptPos, 3));
+const particles = new THREE.Points(ptGeo, new THREE.PointsMaterial({
+  color: 0x00f5ff, size: 0.06,
+  transparent: true, opacity: 0.5,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+}));
+scene.add(particles);
+
+// ─────────────────────────────────────────────
+// PYRAMID
+// ─────────────────────────────────────────────
+const pyrBase = new THREE.ConeGeometry(2.2, 3.8, 4, 1, false);
+pyrBase.rotateY(Math.PI / 4);
+
+// Solid shell
+const pyrSolid = new THREE.Mesh(pyrBase, new THREE.MeshPhongMaterial({
+  color: 0x001833, emissive: 0x003366, transparent: true, opacity: 0.5,
+  side: THREE.DoubleSide,
+}));
+
+// Primary wireframe
+const pyrWire = new THREE.Mesh(pyrBase, new THREE.MeshBasicMaterial({
+  color: 0x00f5ff, wireframe: true, transparent: true, opacity: 1.0,
+}));
+
+// Outer glow ring (additive)
+const pyrGlowGeo = new THREE.ConeGeometry(2.45, 4.1, 4, 1, false);
+pyrGlowGeo.rotateY(Math.PI / 4);
+const pyrGlow = new THREE.Mesh(pyrGlowGeo, new THREE.MeshBasicMaterial({
+  color: 0x00f5ff, wireframe: true, transparent: true, opacity: 0.18,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+}));
+const pyrGlow2 = new THREE.Mesh(
+  new THREE.ConeGeometry(2.75, 4.5, 4, 1, false),
+  new THREE.MeshBasicMaterial({
+    color: 0x0044ff, wireframe: true, transparent: true, opacity: 0.07,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  })
+);
+pyrGlow2.geometry.rotateY(Math.PI / 4);
+
+// Horizontal rings at pyramid base & tip
+function makeRing(r, y) {
+  const g = new THREE.TorusGeometry(r, 0.015, 8, 64);
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color: 0x00f5ff, transparent: true, opacity: 0.4,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  m.rotation.x = Math.PI / 2;
+  m.position.y = y;
+  return m;
+}
+const ringBase = makeRing(2.2, -1.9);
+const ringMid  = makeRing(1.1, 0.0);
+
+const pyrGroup = new THREE.Group();
+pyrGroup.add(pyrSolid, pyrWire, pyrGlow, pyrGlow2, ringBase, ringMid);
+scene.add(pyrGroup);
+
+// ─────────────────────────────────────────────
+// FRAGMENT GEOMETRIES
+// ─────────────────────────────────────────────
+const FRAG_DATA = [
+  { geo: new THREE.IcosahedronGeometry(0.65, 0), color: 0x00f5ff,  target: new THREE.Vector3(-4.5, 2.8, -0.5), label: 'ft0' },
+  { geo: new THREE.OctahedronGeometry(0.65),     color: 0xff00aa,  target: new THREE.Vector3( 4.5, 2.8, -0.5), label: 'ft1' },
+  { geo: new THREE.BoxGeometry(0.9,0.9,0.9),     color: 0xffcc00,  target: new THREE.Vector3( 0.0, 4.8, -1.5), label: 'ft2' },
+  { geo: new THREE.TetrahedronGeometry(0.8),      color: 0x00ff88,  target: new THREE.Vector3(-5.0,-2.5, 0.0),  label: 'ft3' },
+  { geo: new THREE.TorusGeometry(0.5,0.16,8,24), color: 0xff4466,  target: new THREE.Vector3( 5.0,-2.5, 0.0),  label: 'ft4' },
+  { geo: new THREE.DodecahedronGeometry(0.6),    color: 0xaa44ff,  target: new THREE.Vector3(-2.2,-4.5, 0.5),  label: 'ft5' },
+  { geo: new THREE.ConeGeometry(0.5,1.0,4),      color: 0x44aaff,  target: new THREE.Vector3( 2.2,-4.5, 0.5),  label: 'ft6' },
+  { geo: new THREE.TorusKnotGeometry(0.38,0.13,80,8), color: 0xff8800, target: new THREE.Vector3(0.0, 0.0,-5.5), label: 'ft7' },
+];
+
+const fragGroups = FRAG_DATA.map(fd => {
+  const g = new THREE.Group();
+
+  const solid = new THREE.Mesh(fd.geo, new THREE.MeshPhongMaterial({
+    color: fd.color, emissive: fd.color, emissiveIntensity: 0.25,
+    transparent: true, opacity: 0,
+  }));
+
+  const wire = new THREE.Mesh(fd.geo, new THREE.MeshBasicMaterial({
+    color: fd.color, wireframe: true, transparent: true, opacity: 0,
+  }));
+
+  const glowMesh = new THREE.Mesh(fd.geo, new THREE.MeshBasicMaterial({
+    color: fd.color, wireframe: true, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  glowMesh.scale.setScalar(1.35);
+
+  g.add(solid, wire, glowMesh);
+  g.position.set(0, 0, 0);
+  g.userData = { solid: solid.material, wire: wire.material, glow: glowMesh.material, target: fd.target };
+  scene.add(g);
+  return g;
+});
+
+// ─────────────────────────────────────────────
+// CONSTELLATION LINES
+// ─────────────────────────────────────────────
+const CONN_PAIRS = [[0,1],[0,2],[1,2],[0,3],[1,4],[2,5],[3,5],[4,6],[5,7],[6,7],[2,7],[0,5]];
+const connLines = CONN_PAIRS.map(([a,b]) => {
+  const g = new THREE.BufferGeometry().setFromPoints([
+    fragGroups[a].position.clone(),
+    fragGroups[b].position.clone(),
+  ]);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0x00f5ff, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending,
+  });
+  const line = new THREE.Line(g, mat);
+  line.userData = { mat, a, b };
+  scene.add(line);
+  return line;
+});
+
+// ─────────────────────────────────────────────
+// OUTER ORBIT RING (appears in phase 3)
+// ─────────────────────────────────────────────
+const orbitRingGeo = new THREE.TorusGeometry(6.5, 0.02, 8, 120);
+const orbitRingMat = new THREE.MeshBasicMaterial({
+  color: 0x00f5ff, transparent: true, opacity: 0,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const orbitRing = new THREE.Mesh(orbitRingGeo, orbitRingMat);
+orbitRing.rotation.x = Math.PI / 2;
+scene.add(orbitRing);
+
+// ─────────────────────────────────────────────
+// SCROLL STATE
+// ─────────────────────────────────────────────
+let scrollT = 0, targetT = 0;
+window.addEventListener('scroll', () => {
+  const max = document.body.scrollHeight - innerHeight;
+  targetT = max > 0 ? window.scrollY / max : 0;
+}, { passive: true });
+
+// ─────────────────────────────────────────────
+// DOM REFS
+// ─────────────────────────────────────────────
+const phases = [0,1,2,3].map(i => document.getElementById('p' + i));
+const fragTags = FRAG_DATA.map(fd => document.getElementById(fd.label));
+const progressFill = document.getElementById('progressFill');
+const scrollHint   = document.getElementById('scrollHint');
+const ctaBar       = document.getElementById('ctaBar');
+const dataReadout  = document.getElementById('dataReadout');
+const drNodes      = document.getElementById('drNodes');
+const drEdges      = document.getElementById('drEdges');
+
+const PHASE_RANGES = [
+  [0.00, 0.20],  // p0
+  [0.22, 0.45],  // p1
+  [0.48, 0.72],  // p2
+  [0.76, 1.00],  // p3
+];
+
+// ─────────────────────────────────────────────
+// MAIN LOOP
+// ─────────────────────────────────────────────
+let clock = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  clock += 0.016;
+
+  // Smooth scroll
+  scrollT = lerp(scrollT, targetT, 0.07);
+  const t = scrollT;
+
+  // Progress bar
+  progressFill.style.height = `${t * 100}%`;
+  scrollHint.style.opacity = t < 0.04 ? '1' : '0';
+
+  // Phase text visibility
+  phases.forEach((el, i) => {
+    const [lo, hi] = PHASE_RANGES[i];
+    el.classList.toggle('show', t >= lo && t <= hi);
+  });
+
+  // CTA + data readout
+  const inFinal = t > 0.76;
+  ctaBar.classList.toggle('show', inFinal);
+  dataReadout.classList.toggle('show', inFinal);
+
+  // ── Phase 1: Pyramid expands & spins (t: 0 → 0.38) ──────────────
+  const p1 = clamp(remap(t, 0, 0.38, 0, 1), 0, 1);
+  const p1e = easeInOut3(p1);
+
+  const pyrScale = 1 + p1e * 2.2;
+  pyrGroup.scale.setScalar(pyrScale);
+  pyrGroup.rotation.y += 0.003 + p1 * 0.018;
+
+  // Pyramid pulsing glow
+  const pulse = Math.sin(clock * 3.5) * 0.5 + 0.5;
+  pyrWire.material.opacity   = 0.85 + pulse * 0.15;
+  pyrGlow.material.opacity   = 0.12 + pulse * 0.08;
+  pyrGlow2.material.opacity  = 0.05 + pulse * 0.04;
+  ringBase.material.opacity  = 0.3 + pulse * 0.2;
+  ringMid.material.opacity   = 0.25 + pulse * 0.2;
+
+  // Rings rotate
+  ringBase.rotation.z = clock * 0.4;
+  ringMid.rotation.z  = clock * -0.6;
+
+  // ── Phase 2: Fragmentation (t: 0.30 → 0.68) ─────────────────────
+  const p2 = clamp(remap(t, 0.30, 0.68, 0, 1), 0, 1);
+  const p2e = easeOut3(p2);
+
+  // Pyramid fades out
+  pyrSolid.material.opacity = (1 - p2e) * 0.5;
+  pyrWire.material.opacity  = Math.max(0, (1 - p2e)) * 0.85;
+  pyrGlow.material.opacity  = (1 - p2e) * 0.12;
+
+  // Fragments emerge with stagger
+  fragGroups.forEach((grp, i) => {
+    const delay = i * 0.07;
+    const fT = clamp(remap(p2, delay, 1, 0, 1), 0, 1);
+    const fE = easeOut5(fT);
+
+    grp.position.lerpVectors(new THREE.Vector3(0,0,0), grp.userData.target, fE);
+
+    const { solid, wire, glow } = grp.userData;
+    solid.opacity = fE * 0.35;
+    wire.opacity  = fE * 0.85;
+    glow.opacity  = fE * 0.18;
+
+    grp.rotation.x += 0.008 + i * 0.003;
+    grp.rotation.y += 0.012 + i * 0.002;
+    grp.rotation.z += 0.005 + i * 0.001;
+
+    const fragPulse = 1 + Math.sin(clock * 2.5 + i * 1.1) * 0.04;
+    grp.scale.setScalar(Math.max(0.001, fE) * fragPulse);
+
+    // 2D label
+    const tag = fragTags[i];
+    if (fE > 0.6) {
+      tag.classList.add('show');
+      // Project 3D pos to screen
+      const v = grp.position.clone().project(camera);
+      const sx = (v.x *  0.5 + 0.5) * innerWidth;
+      const sy = (v.y * -0.5 + 0.5) * innerHeight + 28;
+      tag.style.left = sx + 'px';
+      tag.style.top  = sy + 'px';
+      tag.style.color = `rgba(0,245,255,${(fE-0.6)*1.75*0.7})`;
+    } else {
+      tag.classList.remove('show');
+    }
+  });
+
+  // ── Phase 3: Constellation (t: 0.62 → 1.0) ──────────────────────
+  const p3 = clamp(remap(t, 0.62, 1.0, 0, 1), 0, 1);
+  const p3e = easeInOut3(p3);
+
+  // Connection lines
+  connLines.forEach((line, li) => {
+    const delay2 = li * 0.06;
+    const lT = clamp(remap(p3, delay2, 1, 0, 1), 0, 1);
+    line.userData.mat.opacity = easeOut3(lT) * 0.28;
+
+    const pa = line.userData.a, pb = line.userData.b;
+    const pos = line.geometry.attributes.position;
+    pos.setXYZ(0, fragGroups[pa].position.x, fragGroups[pa].position.y, fragGroups[pa].position.z);
+    pos.setXYZ(1, fragGroups[pb].position.x, fragGroups[pb].position.y, fragGroups[pb].position.z);
+    pos.needsUpdate = true;
+  });
+
+  // Orbit ring
+  orbitRingMat.opacity = p3e * 0.25;
+  orbitRing.rotation.z = clock * 0.15;
+  orbitRing.rotation.x = Math.PI / 2 + Math.sin(clock * 0.3) * 0.15;
+
+  // Data readout
+  if (inFinal) {
+    drNodes.textContent = Math.round(p3e * 8);
+    drEdges.textContent = Math.round(p3e * 12);
+  }
+
+  // ── Camera drift ──────────────────────────────────────────────────
+  const camDriftX = Math.sin(clock * 0.18) * 0.6 * (1 - t * 0.5);
+  const camDriftY = Math.cos(clock * 0.12) * 0.4 * (1 - t * 0.5);
+  camera.position.x = camDriftX;
+  camera.position.y = 1 + camDriftY - t * 2.5;
+  camera.position.z = lerp(13, 10, easeInOut3(p2));
+  camera.lookAt(0, -t * 1.2, 0);
+
+  // ── Particle orbit ────────────────────────────────────────────────
+  const posAttr = ptGeo.attributes.position;
+  for (let i = 0; i < ptCount; i++) {
+    const r   = ptVel[i*3];
+    const ang = ptVel[i*3+1] + clock * (0.12 + (i%7)*0.01);
+    const phi = ptVel[i*3+2];
+    posAttr.setXYZ(i,
+      r * Math.sin(phi) * Math.cos(ang),
+      r * Math.cos(phi) * 0.6,
+      r * Math.sin(phi) * Math.sin(ang)
+    );
+  }
+  posAttr.needsUpdate = true;
+  particles.material.opacity = 0.35 + p1e * 0.25;
+
+  // ── Lights pulse ─────────────────────────────────────────────────
+  cyanLight.intensity = 5 + Math.sin(clock * 3.1) * 1.5;
+  magLight.intensity  = 3 + Math.cos(clock * 2.4) * 1;
+  goldLight.intensity = 2.5 + Math.sin(clock * 2.7 + 1) * 0.8;
+
+  // ── Floor grid animation ─────────────────────────────────────────
+  floorGrid.position.y = -7 - p1e * 2;
+  floorGrid.material.opacity = 0.12 - p2e * 0.06;
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// ─────────────────────────────────────────────
+// RESIZE
+// ─────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
