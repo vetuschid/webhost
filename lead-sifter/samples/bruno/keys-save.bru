@@ -1,0 +1,17 @@
+meta {
+  name: Keys / save
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/keys
+  body: json
+}
+
+body:json {
+  {
+    "provider": "openai",
+    "value": "sk-paste-yours"
+  }
+}

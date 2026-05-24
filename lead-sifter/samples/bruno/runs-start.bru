@@ -1,0 +1,38 @@
+meta {
+  name: Runs / start (Apollo)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/runs
+  body: json
+}
+
+body:json {
+  {
+    "model": "claude-opus-4-7",
+    "provider": "anthropic",
+    "bundle_id": 1,
+    "max_parallel": 5,
+    "streaming": true,
+    "source": "apollo",
+    "ghl_target": {
+      "create_contact": true,
+      "pipeline_id": null,
+      "stage_id": null,
+      "tags": ["sifted-by-claude"],
+      "workflow_id": null
+    },
+    "apollo": {
+      "person_titles": ["VP RevOps", "Head of Revenue Operations"],
+      "person_locations": ["United States"],
+      "organization_locations": [],
+      "organization_num_employees_ranges": ["51,200", "201,500"],
+      "q_keywords": "healthcare",
+      "per_page": 100,
+      "max_pages": 2,
+      "enrich_emails": false
+    }
+  }
+}

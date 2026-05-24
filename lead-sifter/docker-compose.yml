@@ -1,0 +1,28 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - lead-sifter-data:/data
+      - ./backend:/app
+    environment:
+      - LEAD_SIFTER_HOME=/data
+      - LEAD_SIFTER_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  lead-sifter-data:

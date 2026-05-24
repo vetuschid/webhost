@@ -1,0 +1,22 @@
+# Python
+backend/.venv/
+backend/**/__pycache__/
+backend/*.egg-info/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+*.pyc
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local data
+*.db
+*.key
+.lead-sifter/
+
+# Env
+.env
+.env.local
