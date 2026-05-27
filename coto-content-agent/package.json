@@ -1,0 +1,31 @@
+{
+  "name": "coto-content-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first content review and image revision MVP for Coto Collective / LensLock",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint",
+    "seed": "tsx scripts/seed-lenslock.ts"
+  },
+  "dependencies": {
+    "next": "15.5.18",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@anthropic-ai/sdk": "^0.32.1",
+    "openai": "^4.73.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

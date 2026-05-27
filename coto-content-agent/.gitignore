@@ -1,0 +1,21 @@
+node_modules
+.next
+*.tsbuildinfo
+next-env.d.ts
+.env
+.env.local
+.DS_Store
+*.log
+
+# Per-client raw assets - originals/outputs are big and per-environment.
+# We DO keep the markdown rules and manifest skeletons so the schema is reproducible.
+/data/clients/*/batches/*/originals/*
+!/data/clients/*/batches/*/originals/.gitkeep
+/data/clients/*/batches/*/generated_outputs/*
+!/data/clients/*/batches/*/generated_outputs/.gitkeep
+/data/clients/*/batches/*/approved/*
+!/data/clients/*/batches/*/approved/.gitkeep
+/data/clients/*/batches/*/rejected/*
+!/data/clients/*/batches/*/rejected/.gitkeep
+/data/clients/*/reference_assets/**/*
+!/data/clients/*/reference_assets/**/.gitkeep

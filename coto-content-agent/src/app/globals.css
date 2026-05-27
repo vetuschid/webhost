@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+}
+
+.card {
+  @apply bg-panel border border-edge rounded-lg;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center rounded-md border border-edge bg-panel px-3 py-1.5 text-sm hover:border-accent transition;
+}
+
+.btn-primary {
+  @apply btn bg-accent/20 border-accent text-accent hover:bg-accent/30;
+}
+
+.btn-danger {
+  @apply btn border-bad/40 text-bad hover:bg-bad/10;
+}
+
+.btn-good {
+  @apply btn border-ok/40 text-ok hover:bg-ok/10;
+}
+
+.pill {
+  @apply inline-flex items-center rounded-full border border-edge bg-ink px-2 py-0.5 text-[11px] font-medium text-zinc-300;
+}
+
+.pill-ok { @apply pill border-ok/50 text-ok; }
+.pill-warn { @apply pill border-warn/50 text-warn; }
+.pill-bad { @apply pill border-bad/50 text-bad; }
+
+textarea, input, select {
+  @apply bg-ink border border-edge rounded-md px-2 py-1.5 text-sm w-full;
+}
