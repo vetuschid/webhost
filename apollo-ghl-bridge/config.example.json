@@ -1,0 +1,54 @@
+{
+  "apollo": {
+    "listName": "VIP Intent ICP",
+    "perPage": 100,
+    "maxPages": 500
+  },
+  "csv": {
+    "path": "samples/apollo-list-export.csv",
+    "mapping": {
+      "first_name": "First Name",
+      "last_name": "Last Name",
+      "email": "Work Email",
+      "phone": "Phone",
+      "title": "Job Title",
+      "company": "Company",
+      "domain": "Domain",
+      "linkedin_url": "LinkedIn URL",
+      "city": "City",
+      "state": "State",
+      "country": "Country"
+    }
+  },
+  "icp": {
+    "requireFields": ["email"],
+    "titleIncludesAny": [
+      "revenue operations",
+      "revops",
+      "sales operations",
+      "sales ops",
+      "gtm systems",
+      "chief revenue"
+    ],
+    "titleRequired": false,
+    "titleExcludesAny": ["intern", "student", "assistant"],
+    "allowedCountries": ["United States", "USA", "US", "Canada"],
+    "countryRequired": false,
+    "excludeDomains": ["gong.io", "clari.com", "salesloft.com", "outreach.io"],
+    "minEmployees": 25,
+    "maxEmployees": 2000,
+    "weights": { "title": 4, "country": 1, "employees": 2 },
+    "minScore": 0
+  },
+  "ghl": {
+    "locationId": "PUT_LOCATION_ID_HERE_OR_USE_ENV",
+    "tags": ["VIP_INTENT_ICP_TEST", "APOLLO_IMPORTED_TEST"],
+    "useSeparateTagCall": false,
+    "customFields": [
+      { "id": "REPLACE_WITH_GHL_FIELD_ID_apollo_source", "value": "Apollo List Import" },
+      { "id": "REPLACE_WITH_GHL_FIELD_ID_icp_score", "from": "score" },
+      { "id": "REPLACE_WITH_GHL_FIELD_ID_vip_reason", "from": "reasons" },
+      { "id": "REPLACE_WITH_GHL_FIELD_ID_job_title", "from": "title" }
+    ]
+  }
+}

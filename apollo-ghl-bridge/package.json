@@ -1,0 +1,19 @@
+{
+  "name": "apollo-ghl-bridge",
+  "version": "0.1.0",
+  "description": "Pull an intent+ICP-qualified Apollo List and sync to GoHighLevel (dry-run first).",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dry": "node runs/dry_run.js",
+    "sync": "node runs/sync_to_ghl.js",
+    "start": "node index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.6",
+    "dotenv": "^16.4.5"
+  }
+}
