@@ -14,7 +14,8 @@
 import { request } from '../lib/http.js';
 import { normalizeApolloContact } from '../lib/normalize.js';
 
-const APOLLO_BASE = 'https://api.apollo.io/api/v1';
+// Override APOLLO_BASE_URL for tests / mock harness; default = production.
+const APOLLO_BASE = (process.env.APOLLO_BASE_URL || 'https://api.apollo.io').replace(/\/$/, '') + '/api/v1';
 
 function headers(apiKey) {
   return {

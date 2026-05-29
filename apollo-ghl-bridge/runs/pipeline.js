@@ -34,9 +34,9 @@ async function loadFromSource(source, { config, env, csvPath }) {
   throw new Error(`Unknown source "${source}". Use --source apollo|csv.`);
 }
 
-export async function run({ dryRun = true, source = 'apollo', csvPath, limit } = {}) {
-  const config = await loadConfig();
-  const env = loadEnv();
+export async function run({ dryRun = true, source = 'apollo', csvPath, limit, configOverride, envOverride } = {}) {
+  const config = configOverride ?? (await loadConfig());
+  const env = envOverride ?? loadEnv();
   const log = createLog({ dryRun, source });
 
   const locationId = env.GHL_LOCATION_ID || config.ghl?.locationId;
@@ -55,13 +55,16 @@ export async function run({ dryRun = true, source = 'apollo', csvPath, limit } =
     }
   }
 
-  console.log(
-    `\n=== Apollo→GHL bridge | mode=${dryRun ? 'DRY-RUN (no writes)' : 'LIVE'} | source=${source} ===\n`,
-  );
+  const silent = process.env.LOG_SILENT === '1';
+  if (!silent) {
+    console.log(
+      `\n=== Apollo→GHL bridge | mode=${dryRun ? 'DRY-RUN (no writes)' : 'LIVE'} | source=${source} ===\n`,
+    );
+  }
 
   // 1. Pull
   let contacts = await loadFromSource(source, { config, env, csvPath });
-  console.log(`Pulled ${contacts.length} record(s) from ${source}.`);
+  if (!silent) console.log(`Pulled ${contacts.length} record(s) from ${source}.`);
 
   // 2. Dedupe (email -> domain) within the pulled set
   const { unique, duplicates } = dedupe(contacts);
@@ -72,7 +75,7 @@ export async function run({ dryRun = true, source = 'apollo', csvPath, limit } =
   // 3. Optional limit (handy for small test runs)
   let working = unique;
   if (limit && limit > 0) working = working.slice(0, limit);
-  console.log(`${working.length} unique record(s) after dedupe${limit ? ` (limited to ${limit})` : ''}.\n`);
+  if (!silent) console.log(`${working.length} unique record(s) after dedupe${limit ? ` (limited to ${limit})` : ''}.\n`);
 
   // 4. Per-record ICP verify + write decision
   for (const contact of working) {
@@ -127,7 +130,9 @@ export async function run({ dryRun = true, source = 'apollo', csvPath, limit } =
 
   const path = await log.write();
   const summary = log.summary();
-  console.log(`\nSummary: ${JSON.stringify(summary.counts)}  (mode: ${dryRun ? 'DRY-RUN' : 'LIVE'})`);
-  console.log(`Full decision log: ${path}\n`);
-  return summary;
+  if (!silent) {
+    console.log(`\nSummary: ${JSON.stringify(summary.counts)}  (mode: ${dryRun ? 'DRY-RUN' : 'LIVE'})`);
+    console.log(`Full decision log: ${path}\n`);
+  }
+  return { ...summary, decisions: log.decisions };
 }

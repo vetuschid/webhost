@@ -41,26 +41,55 @@ zero writes until you explicitly pass `--live`.
 ```bash
 cd apollo-ghl-bridge
 npm install
-cp .env.example .env            # fill APOLLO_MASTER_KEY, GHL_PIT, GHL_LOCATION_ID
+cp .env.example .env                 # fill APOLLO_MASTER_KEY, GHL_PIT, GHL_LOCATION_ID
 cp config.example.json config.json   # set listName, tags, customFields IDs, ICP rules
 ```
 
-## Run
+That's it — the three keys in `.env` are the only "login". No UI, no vault, no setup script.
+
+## First-run workflow (the safe path)
+
+```bash
+# 0. Smoke-test the pipeline without any keys (uses the sample CSV)
+node index.js --source csv --csv samples/apollo-list-export.csv
+
+# 1. Verify auth + list lookup + GHL location, READ-ONLY (no writes)
+npm run preflight
+#   ✓ GET /labels worked
+#   ✓ list "VIP Intent ICP" resolved → lab_xyz
+#   ✓ /contacts/search page 1 returned N contacts
+#   ✓ GET /locations/<id> worked
+#   (warns if any custom-field IDs are still REPLACE_WITH_…)
+
+# 2. Live smoke — dry-run, 1 record, against real APIs
+npm run smoke
+
+# 3. Live smoke — actually write ONE contact to GHL
+npm run smoke:live
+
+# 4. Full dry-run against the real Apollo List (zero writes, full decision log)
+npm run dry
+
+# 5. Full live sync
+npm run sync
+```
+
+## Run reference
 
 ```bash
 # DRY-RUN (default, zero writes) — pull the Apollo List and log every decision
 node index.js
 npm run dry
 
-# DRY-RUN from a CSV instead (no keys needed) — great first smoke test
+# DRY-RUN from a CSV instead (no keys needed)
 node index.js --source csv --csv samples/apollo-list-export.csv
 
-# LIVE sync to GHL (writes!) — validated for required keys before any write
+# LIVE sync to GHL — pre-flight validates required keys before any write
 node index.js --live
 npm run sync
 
 # Useful flags
-node index.js --live --limit 10        # only the first 10 qualified records
+node index.js --live --limit 10         # only the first 10 qualified records
 node runs/dry_run.js                    # explicit dry-run entry
 node runs/sync_to_ghl.js                # explicit live entry
 ```
@@ -127,5 +156,28 @@ apollo-ghl-bridge/
 ## Tests
 
 ```bash
-npm test     # node --test → dedupe, icp_rules, ghl_contacts, normalize
+npm test
 ```
+
+Three layers, **24 tests total, all green**:
+
+- **Unit** — `test/dedupe.test.js`, `test/icp_rules.test.js`, `test/normalize.test.js`,
+  `test/ghl_contacts.test.js`. Pure-function coverage.
+- **Integration** — `test/harness/integration.test.js` drives the real `pipeline.js`
+  against in-process mock servers (`test/harness/mock_server.js`) that impersonate Apollo
+  V1 + GHL V2. Covers:
+  - `GET /labels` with `x-api-key`, list name → id lookup
+  - `POST /contacts/search` pagination across 3 pages
+  - Apollo 401 (wrong key class) and 429 (Retry-After backoff)
+  - GHL upsert with `Authorization: Bearer` + `Version: 2021-07-28` + locationId + tags
+    + customFields (placeholders skipped)
+  - `new: true` → action=create, `new: false` → action=update
+  - `useSeparateTagCall=true` triggers `POST /contacts/{id}/tags`
+  - GHL 5xx upsert retried then logged as `error`
+  - Preflight blocks `--live` without keys before any HTTP call
+  - Dry-run makes zero GHL writes even when keys are present
+- **Live** — `npm run preflight` and `npm run smoke[:live]` against real APIs once
+  you have credentials.
+
+Base URLs are configurable via `APOLLO_BASE_URL` / `GHL_BASE_URL` env vars (real production
+URLs by default), which is what the integration tests use to redirect traffic to the mocks.

@@ -34,6 +34,7 @@ export function createLog({ dryRun, source }) {
     };
     decisions.push(entry);
 
+    if (process.env.LOG_SILENT === '1') return;
     const mode = dryRun ? 'DRY ' : 'LIVE';
     let extra = '';
     if (meta.reason) extra += ` reason=${meta.reason}`;
@@ -63,5 +64,5 @@ export function createLog({ dryRun, source }) {
     return path.join(dir, 'sync_log.json');
   }
 
-  return { decision, summary, write };
+  return { decision, summary, write, decisions };
 }

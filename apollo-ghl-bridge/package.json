@@ -9,6 +9,9 @@
   "scripts": {
     "dry": "node runs/dry_run.js",
     "sync": "node runs/sync_to_ghl.js",
+    "preflight": "node scripts/preflight.js",
+    "smoke": "node scripts/live_smoke.js",
+    "smoke:live": "node scripts/live_smoke.js --live",
     "start": "node index.js",
     "test": "node --test"
   },

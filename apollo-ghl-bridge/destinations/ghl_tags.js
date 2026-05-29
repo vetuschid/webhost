@@ -7,7 +7,8 @@
 
 import { request } from '../lib/http.js';
 
-const GHL_BASE = 'https://services.leadconnectorhq.com';
+// Override GHL_BASE_URL for tests / mock harness; default = production.
+const GHL_BASE = (process.env.GHL_BASE_URL || 'https://services.leadconnectorhq.com').replace(/\/$/, '');
 const GHL_VERSION = '2021-07-28';
 
 function headers(pit) {
